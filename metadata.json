@@ -1,0 +1,6 @@
+{
+  "name": "FotoKiosk Pro - Smart Green Screen Photobooth",
+  "description": "Aplikasi photobooth interaktif modern dengan real-time chroma keying green screen, single frame & strip photo templates, validasi pembayaran Cash/QRIS oleh admin, countdown interaktif, printer output, dan download digital.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
