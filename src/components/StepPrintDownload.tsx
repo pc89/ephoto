@@ -3,7 +3,7 @@ import { Printer, Download, QrCode, RotateCcw, Sparkles, CheckCircle2 } from 'lu
 import confetti from 'canvas-confetti';
 import QRCode from 'qrcode';
 import { OrderSession, PhotoCapture, PricingConfig, TemplateTheme } from '../types/photobooth';
-import { getPresetForTemplate } from '../utils/canvaTemplates';
+import { getPresetForTemplate, getSlotsForTheme } from '../utils/canvaTemplates';
 
 interface StepPrintDownloadProps {
   order: OrderSession;
@@ -87,6 +87,8 @@ export const StepPrintDownload: React.FC<StepPrintDownloadProps> = ({
       const preset = getPresetForTemplate(order.templateType, order.photoCount);
       const width = preset.width;
       const height = preset.height;
+      const slots = getSlotsForTheme(selectedTheme, order.templateType, order.photoCount);
+      const cornerR = selectedTheme.cornerRadius !== undefined ? selectedTheme.cornerRadius : 14;
 
       canvas.width = width;
       canvas.height = height;
@@ -105,23 +107,19 @@ export const StepPrintDownload: React.FC<StepPrintDownloadProps> = ({
         if (isCancelled) return;
       }
 
-      // 2. If Custom Template is present, draw as base background artwork
-      if (templateImg) {
-        ctx.drawImage(templateImg, 0, 0, width, height);
-      } else {
-        // Otherwise draw standard studio header for built-in themes
+      // If Built-in theme (no custom Canva overlay), draw studio header text
+      if (!templateImg) {
         ctx.fillStyle = selectedTheme.textColor || '#1c1917';
         ctx.font = 'bold 36px "Space Grotesk", sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(pricing.boothName || 'FOTOKIOSK PRO', width / 2, preset.headerArea.y + 42);
+        ctx.fillText(pricing.boothName || 'E PHOTO BOOTH', width / 2, preset.headerArea.y + 42);
 
         ctx.font = '500 18px "Plus Jakarta Sans", sans-serif';
         ctx.letterSpacing = '4px';
         ctx.fillText('STUDIO MEMORIES', width / 2, preset.headerArea.y + 72);
       }
 
-      // 3. Resolve and Draw Photos into designated Slots
-      const slots = preset.slots;
+      // 2. Resolve and Draw Photos into designated Slots (sitting cleanly inside/behind the frame)
       const assignedIds = order.assignedSlots || [];
 
       // Preload all slot images concurrently
@@ -143,12 +141,12 @@ export const StepPrintDownload: React.FC<StepPrintDownloadProps> = ({
       if (isCancelled) return;
 
       // Draw each photo into its designated slot rectangle with cover crop & clean borders
-      loadedSlots.forEach(({ img, slot, idx }) => {
+      loadedSlots.forEach(({ img, slot }) => {
         if (!img) {
           // Draw empty slot fallback box
           ctx.fillStyle = '#f5f5f4';
           ctx.beginPath();
-          ctx.roundRect(slot.x, slot.y, slot.width, slot.height, 14);
+          ctx.roundRect(slot.x, slot.y, slot.width, slot.height, cornerR);
           ctx.fill();
           ctx.strokeStyle = '#d6d3d1';
           ctx.lineWidth = 3;
@@ -175,46 +173,90 @@ export const StepPrintDownload: React.FC<StepPrintDownloadProps> = ({
           sy = (img.height - sh) / 2;
         }
 
-        // Clip rounded rectangle for photo slot
-        ctx.beginPath();
-        ctx.roundRect(slot.x, slot.y, slot.width, slot.height, 14);
-        ctx.clip();
-        ctx.drawImage(img, sx, sy, sw, sh, slot.x, slot.y, slot.width, slot.height);
-        ctx.restore();
-
-        // Stroke border ONLY for built-in themes (Canva templates already provide custom frames)
+        // Draw photo at layer behind template
         if (!templateImg) {
+          // Built-in theme: clip rectangle for photo slot
+          ctx.beginPath();
+          ctx.roundRect(slot.x, slot.y, slot.width, slot.height, cornerR);
+          ctx.clip();
+          ctx.drawImage(img, sx, sy, sw, sh, slot.x, slot.y, slot.width, slot.height);
+          ctx.restore();
+
+          // Stroke border ONLY for built-in themes (Canva templates already provide custom frames)
           ctx.strokeStyle =
             selectedTheme.borderColor ||
             (selectedTheme.bgColor === '#ffffff' ? '#18181b' : '#ffffff');
           ctx.lineWidth = 6;
           ctx.beginPath();
-          ctx.roundRect(slot.x, slot.y, slot.width, slot.height, 14);
+          ctx.roundRect(slot.x, slot.y, slot.width, slot.height, cornerR);
           ctx.stroke();
+        } else {
+          // Custom Canva template:
+          // Foto diletakkan tepat di BELAKANG template, dengan bleed agar menutupi seluruh jendela transparan
+          const bleed = 10;
+          ctx.drawImage(
+            img,
+            sx,
+            sy,
+            sw,
+            sh,
+            slot.x - bleed,
+            slot.y - bleed,
+            slot.width + bleed * 2,
+            slot.height + bleed * 2
+          );
+          ctx.restore();
         }
       });
 
-      // 4. Draw Custom Canva Overlay with slot cutouts punched transparently
-      // Sits ON TOP of the photos, so the Canva frame, borders, and decorations cleanly frame the photos!
+      // 3. Draw Template Canva Frame DI DEPAN FOTO
+      // Posisi foto berada di BELAKANG template, sehingga foto muncul pada bagian template yang transparan
       if (templateImg) {
-        const overlayCanvas = document.createElement('canvas');
-        overlayCanvas.width = width;
-        overlayCanvas.height = height;
-        const octx = overlayCanvas.getContext('2d');
-        if (octx) {
-          octx.drawImage(templateImg, 0, 0, width, height);
-          octx.save();
-          octx.globalCompositeOperation = 'destination-out';
-          slots.forEach((slot) => {
-            octx.beginPath();
-            // Punch out the exact slot window cleanly so photos show through 100%
-            octx.roundRect(slot.x, slot.y, slot.width, slot.height, 14);
-            octx.fill();
-          });
-          octx.restore();
+        // Cek apakah template Canva sudah memiliki area transparan (PNG transparan)
+        let hasTransparency = false;
+        try {
+          const testCanvas = document.createElement('canvas');
+          testCanvas.width = 64;
+          testCanvas.height = 64;
+          const tctx = testCanvas.getContext('2d');
+          if (tctx) {
+            tctx.drawImage(templateImg, 0, 0, 64, 64);
+            const pData = tctx.getImageData(0, 0, 64, 64).data;
+            for (let i = 3; i < pData.length; i += 4) {
+              if (pData[i] < 220) {
+                hasTransparency = true;
+                break;
+              }
+            }
+          }
+        } catch {
+          hasTransparency = false;
+        }
 
-          // Draw the punched Canva frame overlay on top of the composite
-          ctx.drawImage(overlayCanvas, 0, 0, width, height);
+        if (hasTransparency) {
+          // Template Canva asli sudah transparan: langsung gambar template di atas foto,
+          // sehingga foto yang berada di belakangnya muncul pada bagian yang transparan
+          ctx.drawImage(templateImg, 0, 0, width, height);
+        } else {
+          // Template opaque (misal JPG): lubangi area slot foto agar foto di belakangnya terlihat
+          const overlayCanvas = document.createElement('canvas');
+          overlayCanvas.width = width;
+          overlayCanvas.height = height;
+          const octx = overlayCanvas.getContext('2d');
+          if (octx) {
+            octx.drawImage(templateImg, 0, 0, width, height);
+            octx.save();
+            octx.globalCompositeOperation = 'destination-out';
+            slots.forEach((slot) => {
+              octx.beginPath();
+              octx.roundRect(slot.x, slot.y, slot.width, slot.height, cornerR);
+              octx.fill();
+            });
+            octx.restore();
+
+            // Draw the punched Canva frame overlay on top of the photos
+            ctx.drawImage(overlayCanvas, 0, 0, width, height);
+          }
         }
       }
 

@@ -1,6 +1,6 @@
 import React from 'react';
-import { Camera, Lock, Sparkles, RotateCcw, ShieldCheck } from 'lucide-react';
-import { PricingConfig, ServiceType } from '../types/photobooth';
+import { Camera, Lock, Sparkles, RotateCcw, ShieldCheck, Palette } from 'lucide-react';
+import { PricingConfig, ServiceType, AppThemeConfig } from '../types/photobooth';
 
 interface NavbarProps {
   currentStep: number;
@@ -11,15 +11,15 @@ interface NavbarProps {
   onOpenPrompt: () => void;
   onResetSession: () => void;
   isAdminLoggedIn: boolean;
+  appTheme?: AppThemeConfig;
 }
 
 const STEP_LABELS = [
   'Layanan',
   'Pembayaran',
-  'Template',
   'Background',
   'Pemotretan',
-  'Pilih Foto',
+  'Template & Foto',
   'Cetak & Unduh',
 ];
 
@@ -32,28 +32,29 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenPrompt,
   onResetSession,
   isAdminLoggedIn,
+  appTheme,
 }) => {
+  const isDark = appTheme?.isDark;
+  const primaryColor = appTheme?.cssVars['--app-primary'] || '#f59e0b';
+  const accentColor = appTheme?.cssVars['--app-accent'] || '#fbbf24';
+  const primaryTextColor = appTheme?.cssVars['--app-primary-text'] || '#000000';
+
   return (
-    <header className="sticky top-0 z-30 bg-white/85 backdrop-blur-md border-b border-stone-200/80 shadow-xs">
+    <header className={`sticky top-0 z-30 transition-colors duration-200 border-b shadow-xs ${
+      appTheme?.classes.bgNavbar || 'bg-white/85 backdrop-blur-md border-stone-200/80'
+    }`}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-        {/* Brand */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-400 to-amber-300 flex items-center justify-center text-stone-950 font-black shadow-md shadow-amber-400/25">
-            <Camera className="w-5 h-5 stroke-[2.5]" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-heading font-extrabold text-lg tracking-tight text-stone-900">
-                {pricing.boothName || 'FOTOKIOSK PRO'}
-              </span>
-              <span className="text-[10px] font-mono tracking-widest uppercase px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-300/70 font-bold">
-                Smart Studio
-              </span>
-            </div>
-            <p className="text-[11px] text-stone-500 hidden sm:block font-medium">
-              Selfie & Photobooth Studio Experience
-            </p>
-          </div>
+        {/* Brand Logo E Photo Booth */}
+        <div
+          onClick={onResetSession}
+          className="flex items-center py-0.5 cursor-pointer transition hover:opacity-95 active:scale-98 select-none group shrink-0"
+          title="E Photo Booth • Beranda"
+        >
+          <img
+            src="/assets/aistudio/EPhotoBooth_90461f47.png"
+            alt="E Photo Booth"
+            className="h-11 sm:h-13 w-auto object-contain drop-shadow-sm filter transition-transform duration-200 group-hover:scale-[1.02]"
+          />
         </div>
 
         {/* Step Indicator on Desktop */}
@@ -68,18 +69,28 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
                     isActive
-                      ? 'bg-amber-400 text-stone-950 font-bold shadow-xs'
+                      ? appTheme?.classes.activeStep || 'bg-amber-400 text-stone-950 font-bold shadow-xs'
                       : isCompleted
-                      ? 'text-stone-700 bg-stone-100 border border-stone-200'
+                      ? isDark
+                        ? 'text-slate-300 bg-slate-800/80 border border-slate-700'
+                        : 'text-stone-700 bg-stone-100 border border-stone-200'
+                      : isDark
+                      ? 'text-slate-600'
                       : 'text-stone-400'
                   }`}
                 >
                   <span
                     className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
                       isActive
-                        ? 'bg-stone-950 text-amber-300'
+                        ? isDark
+                          ? 'bg-slate-950 text-cyan-300'
+                          : 'bg-stone-950 text-amber-300'
                         : isCompleted
-                        ? 'bg-stone-200 text-stone-700'
+                        ? isDark
+                          ? 'bg-slate-700 text-slate-200'
+                          : 'bg-stone-200 text-stone-700'
+                        : isDark
+                        ? 'bg-slate-800 text-slate-500'
                         : 'bg-stone-100 text-stone-400'
                     }`}
                   >
@@ -88,7 +99,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span>{label}</span>
                 </div>
                 {idx < STEP_LABELS.length - 1 && (
-                  <span className="text-stone-300 mx-0.5 text-xs">/</span>
+                  <span className={`mx-0.5 text-xs ${isDark ? 'text-slate-700' : 'text-stone-300'}`}>/</span>
                 )}
               </div>
             );

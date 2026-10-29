@@ -45,13 +45,17 @@ export const StepCameraShoot: React.FC<StepCameraShootProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [useSimulated, setUseSimulated] = useState<boolean>(false);
   const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [isCameraLoading, setIsCameraLoading] = useState<boolean>(false);
+  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const streamRef = useRef<MediaStream | null>(null);
 
   // Calibration panel
   const [showTuning, setShowTuning] = useState<boolean>(false);
   const [isPickingColor, setIsPickingColor] = useState<boolean>(false);
 
-  // Shoot session states
-  const totalShots = Math.max(photoCount + 2, 4); // Always give 4-6 shots so customer has pose choices
+  // Shoot session states: default to 6 poses so customer has plenty of choices for template slots
+  const [totalShots, setTotalShots] = useState<number>(6);
   const [currentShotIndex, setCurrentShotIndex] = useState<number>(0);
   const [sessionState, setSessionState] = useState<'idle' | 'countdown' | 'flash' | 'review' | 'done'>('idle');
   const [countdownNum, setCountdownNum] = useState<number>(3);
@@ -72,56 +76,123 @@ export const StepCameraShoot: React.FC<StepCameraShootProps> = ({
     }
   }, [background]);
 
-  // Start Camera Stream
-  useEffect(() => {
+  // Robust Camera Stream Initialization with multi-stage fallback
+  const startCamera = useCallback(async (preferredDeviceId?: string) => {
+    setIsCameraLoading(true);
+    setCameraError(null);
+
+    // Stop existing stream if running
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setHasCamera(false);
+      setCameraError('Webcam API tidak didukung browser ini atau koneksi tidak aman (HTTPS/Localhost diperlukan).');
+      setIsCameraLoading(false);
+      return;
+    }
+
+    const deviceId = preferredDeviceId !== undefined ? preferredDeviceId : selectedDeviceId;
     let stream: MediaStream | null = null;
 
-    async function initCamera() {
+    // Attempt 1: 1080p ideal or specific device
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: deviceId
+          ? { deviceId: { exact: deviceId } }
+          : {
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              facingMode: 'user',
+            },
+        audio: false,
+      });
+    } catch (err1) {
+      console.warn('Camera attempt 1 failed, trying 720p fallback:', err1);
+      // Attempt 2: 720p fallback
       try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error('Webcam API tidak didukung pada browser ini.');
-        }
-
         stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            facingMode: 'user',
-          },
+          video: deviceId
+            ? { deviceId: { exact: deviceId } }
+            : {
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
           audio: false,
         });
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play();
-            setHasCamera(true);
-            setCameraError(null);
-          };
+      } catch (err2) {
+        console.warn('Camera attempt 2 failed, trying basic video:true constraint:', err2);
+        // Attempt 3: plain video: true
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        } catch (err3: unknown) {
+          console.warn('All camera attempts failed:', err3);
+          setHasCamera(false);
+          let msg = 'Kamera tidak dapat diakses.';
+          if (err3 instanceof DOMException) {
+            if (err3.name === 'NotAllowedError' || err3.name === 'PermissionDeniedError') {
+              msg = 'Izin kamera diblokir oleh browser. Silakan klik ikon gembok / kamera di bar alamat browser Anda untuk Mengizinkan (Allow) akses kamera, lalu klik tombol "Coba Sambungkan Kamera Lagi".';
+            } else if (err3.name === 'NotFoundError' || err3.name === 'DevicesNotFoundError') {
+              msg = 'Tidak ada perangkat kamera / webcam fisik yang terdeteksi di komputer. Silakan sambungkan webcam USB Anda atau gunakan mode simulasi photobooth.';
+            } else if (err3.name === 'NotReadableError' || err3.name === 'TrackStartError') {
+              msg = 'Kamera sedang digunakan oleh aplikasi lain (seperti Zoom / Meet / OBS). Silakan tutup aplikasi tersebut lalu klik coba lagi.';
+            } else {
+              msg = `Gagal mengakses kamera: ${err3.message || err3.name}`;
+            }
+          }
+          setCameraError(msg);
+          setIsCameraLoading(false);
+          return;
         }
-      } catch (err: unknown) {
-        console.warn('Camera access issue:', err);
-        setHasCamera(false);
-        setCameraError(
-          err instanceof Error
-            ? err.message
-            : 'Kamera tidak terdeteksi atau izin belum diberikan. Mode simulasi photobooth diaktifkan.'
-        );
-        setUseSimulated(true);
       }
     }
 
-    initCamera();
+    if (stream) {
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', 'true');
+        videoRef.current.setAttribute('muted', 'true');
+        videoRef.current.muted = true;
+        try {
+          await videoRef.current.play();
+        } catch (playErr) {
+          console.warn('Autoplay error:', playErr);
+        }
+      }
+      setHasCamera(true);
+      setCameraError(null);
+      setUseSimulated(false);
+      setIsCameraLoading(false);
+
+      // Enumerate available video devices
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const vDevices = devices.filter((d) => d.kind === 'videoinput');
+        setAvailableDevices(vDevices);
+      } catch {
+        // ignore
+      }
+    }
+  }, [selectedDeviceId]);
+
+  useEffect(() => {
+    startCamera();
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
       }
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, []);
+  }, [startCamera]);
 
   // Main Render Loop (Draws Webcam + Background Replacement to Canvas)
   useEffect(() => {
@@ -462,7 +533,43 @@ export const StepCameraShoot: React.FC<StepCameraShootProps> = ({
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Camera Device Switcher if multiple webcams available */}
+          {availableDevices.length > 1 && !useSimulated && (
+            <select
+              value={selectedDeviceId}
+              onChange={(e) => {
+                setSelectedDeviceId(e.target.value);
+                startCamera(e.target.value);
+              }}
+              className="text-xs px-2.5 py-1.5 rounded-xl border border-stone-200 bg-white text-stone-800 font-semibold shadow-2xs focus:outline-none focus:border-amber-500"
+            >
+              {availableDevices.map((dev, idx) => (
+                <option key={dev.deviceId || idx} value={dev.deviceId}>
+                  📷 {dev.label || `Kamera ${idx + 1}`}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Pose Count Selector */}
+          <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-stone-200 text-xs shadow-2xs">
+            <span className="text-[10px] font-bold text-stone-500 px-1.5 uppercase">Pose:</span>
+            {[4, 6, 8].map((count) => (
+              <button
+                key={count}
+                onClick={() => setTotalShots(count)}
+                className={`px-2 py-0.5 rounded-lg text-xs font-bold transition ${
+                  totalShots === count
+                    ? 'bg-amber-400 text-stone-950 shadow-2xs'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                {count}
+              </button>
+            ))}
+          </div>
+
           {/* Simulated Mode Toggle */}
           <button
             onClick={() => setUseSimulated((prev) => !prev)}
@@ -504,127 +611,36 @@ export const StepCameraShoot: React.FC<StepCameraShootProps> = ({
         </div>
       )}
 
-      {/* Camera Alert if no physical webcam */}
-      {cameraError && !useSimulated && (
-        <div className="mb-4 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between text-xs text-amber-900 shadow-xs">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
-            <span>{cameraError}</span>
+      {/* Camera Alert / Error Banner with Retry Button */}
+      {cameraError && (
+        <div className="mb-4 p-4 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-rose-950 shadow-sm animate-in fade-in">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-5 h-5 shrink-0 text-rose-600 mt-0.5" />
+            <div>
+              <p className="font-bold text-rose-900">Perhatian Akses Kamera</p>
+              <p className="text-stone-600 mt-0.5 leading-relaxed">{cameraError}</p>
+            </div>
           </div>
-          <button
-            onClick={() => setUseSimulated(true)}
-            className="px-3 py-1 bg-amber-400 text-stone-950 font-bold rounded-lg text-[11px] shadow-2xs"
-          >
-            Gunakan Simulasi
-          </button>
-        </div>
-      )}
-
-      {/* Chroma Tuning Accordion (If user is using physical cloth) */}
-      {showTuning && currentMode === 'green_screen' && (
-        <div className="mb-4 p-5 rounded-3xl bg-white border border-stone-200 shadow-lg space-y-4 animate-in slide-in-from-top-2 duration-150">
-          <div className="flex items-center justify-between">
-            <h4 className="text-xs font-bold text-stone-900 uppercase tracking-wider flex items-center gap-1.5 font-heading">
-              <Sliders className="w-4 h-4 text-amber-600" />
-              <span>Kalibrasi Chroma Key (Kain Hijau)</span>
-            </h4>
-            <span className="text-[11px] text-stone-500">
-              Gunakan jika Anda memiliki kain green screen fisik di studio
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
-            {/* Color Picker / Eyedropper */}
-            <div>
-              <span className="text-stone-600 font-semibold block mb-1.5">Warna Target Hijau:</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={chromaSettings.keyColor}
-                  onChange={(e) =>
-                    onUpdateChromaSettings({
-                      ...chromaSettings,
-                      keyColor: e.target.value,
-                    })
-                  }
-                  className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
-                />
-                <button
-                  onClick={() => setIsPickingColor(true)}
-                  className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1 ${
-                    isPickingColor
-                      ? 'bg-amber-400 text-stone-950 border-amber-500 animate-pulse'
-                      : 'bg-stone-100 text-stone-700 border-stone-300 hover:bg-stone-200'
-                  }`}
-                >
-                  <Pipette className="w-3 h-3" />
-                  <span>{isPickingColor ? 'Klik Layar...' : 'Pipet Warna'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Tolerance */}
-            <div>
-              <div className="flex justify-between text-stone-600 mb-1 font-semibold">
-                <span>Toleransi Hijau:</span>
-                <span className="font-mono text-stone-900">{chromaSettings.tolerance}%</span>
-              </div>
-              <input
-                type="range"
-                min="10"
-                max="90"
-                value={chromaSettings.tolerance}
-                onChange={(e) =>
-                  onUpdateChromaSettings({
-                    ...chromaSettings,
-                    tolerance: Number(e.target.value),
-                  })
-                }
-                className="w-full accent-amber-500"
-              />
-            </div>
-
-            {/* Smoothness */}
-            <div>
-              <div className="flex justify-between text-stone-600 mb-1 font-semibold">
-                <span>Kehalusan Tepian:</span>
-                <span className="font-mono text-stone-900">{chromaSettings.smoothness}%</span>
-              </div>
-              <input
-                type="range"
-                min="5"
-                max="80"
-                value={chromaSettings.smoothness}
-                onChange={(e) =>
-                  onUpdateChromaSettings({
-                    ...chromaSettings,
-                    smoothness: Number(e.target.value),
-                  })
-                }
-                className="w-full accent-amber-500"
-              />
-            </div>
-
-            {/* Spill Suppression */}
-            <div>
-              <div className="flex justify-between text-stone-600 mb-1 font-semibold">
-                <span>Spill Suppression:</span>
-                <span className="font-mono text-stone-900">{chromaSettings.spillSuppression}%</span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="90"
-                value={chromaSettings.spillSuppression}
-                onChange={(e) =>
-                  onUpdateChromaSettings({
-                    ...chromaSettings,
-                    spillSuppression: Number(e.target.value),
-                  })
-                }
-                className="w-full accent-amber-500"
-              />
-            </div>
+          <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+            <button
+              onClick={() => startCamera()}
+              disabled={isCameraLoading}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 bg-stone-900 hover:bg-stone-800 text-white font-bold rounded-xl text-xs shadow-sm transition disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isCameraLoading ? 'animate-spin' : ''}`} />
+              <span>{isCameraLoading ? 'Menyambungkan...' : 'Hubungkan Ulang Kamera'}</span>
+            </button>
+            {!useSimulated && (
+              <button
+                onClick={() => {
+                  setUseSimulated(true);
+                  setCameraError(null);
+                }}
+                className="flex-1 sm:flex-none px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-stone-950 font-bold rounded-xl text-xs shadow-sm transition"
+              >
+                Gunakan Simulasi
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -634,6 +650,7 @@ export const StepCameraShoot: React.FC<StepCameraShootProps> = ({
         {/* Hidden video element feeding canvas */}
         <video
           ref={videoRef}
+          autoPlay
           playsInline
           muted
           className="hidden"

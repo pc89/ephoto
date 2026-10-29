@@ -26,6 +26,7 @@ import {
   ServiceType,
   TemplateTheme,
   TemplateType,
+  AppThemeId,
 } from './types/photobooth';
 import {
   getAdminPin,
@@ -42,16 +43,36 @@ import {
   saveStoredThemes,
   hydrateFromIndexedDB,
 } from './utils/storage';
-import { KeyRound, ShieldAlert, X } from 'lucide-react';
+import {
+  APP_THEMES,
+  getAppTheme,
+  getStoredAppThemeId,
+  saveStoredAppThemeId,
+  applyAppThemeCss,
+} from './utils/appThemes';
+import { KeyRound, ShieldAlert, X, Palette, Sparkles } from 'lucide-react';
 
 export default function App() {
   // App-wide configurations persisted in localStorage & IndexedDB
+  const [appThemeId, setAppThemeId] = useState<AppThemeId>(getStoredAppThemeId);
+  const currentAppTheme = getAppTheme(appThemeId);
+
   const [pricing, setPricing] = useState<PricingConfig>(getStoredPricing);
   const [adminPin, setAdminPin] = useState<string>(getAdminPin);
   const [backgrounds, setBackgrounds] = useState<BackgroundItem[]>(getStoredBackgrounds);
   const [themes, setThemes] = useState<TemplateTheme[]>(getStoredThemes);
   const [chromaSettings, setChromaSettings] = useState<ChromaSettings>(getStoredChromaSettings);
   const [orderHistory, setOrderHistory] = useState<OrderSession[]>(getStoredOrders);
+
+  // Apply theme CSS variables on mount and theme switch
+  useEffect(() => {
+    applyAppThemeCss(currentAppTheme);
+  }, [appThemeId]);
+
+  const handleUpdateAppThemeId = (newId: AppThemeId) => {
+    setAppThemeId(newId);
+    saveStoredAppThemeId(newId);
+  };
 
   // Hydrate large custom assets from IndexedDB on mount
   useEffect(() => {
@@ -192,7 +213,7 @@ export default function App() {
       paymentStatus: 'verified',
     });
     setOrderHistory(getStoredOrders());
-    // Auto advance to Step 3 (Template Selection)
+    // Auto advance to Step 3 (Background Selection)
     setCurrentStep(3);
   };
 
@@ -222,11 +243,11 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#faf9f5] text-stone-900 flex flex-col font-sans selection:bg-amber-400 selection:text-stone-950">
+    <div className={`min-h-screen ${currentAppTheme.classes.bgApp} flex flex-col font-sans transition-colors duration-250 selection:bg-amber-400 selection:text-stone-950`}>
       {/* Top Navbar */}
       <Navbar
         currentStep={currentStep}
-        totalSteps={7}
+        totalSteps={6}
         pricing={pricing}
         selectedService={selectedService}
         onOpenAdmin={() => {
@@ -239,6 +260,7 @@ export default function App() {
         onOpenPrompt={() => setIsPromptModalOpen(true)}
         onResetSession={handleResetSession}
         isAdminLoggedIn={isAdminLoggedIn}
+        appTheme={currentAppTheme}
       />
 
       {/* Main Content Area */}
@@ -272,29 +294,14 @@ export default function App() {
           />
         )}
 
-        {/* Step 3: Pemilihan Template & Jumlah Foto */}
+        {/* Step 3: Pemilihan Latar Belakang Green Screen / Virtual AI */}
         {currentStep === 3 && (
-          <StepTemplateSelect
-            selectedType={currentTheme.type}
-            selectedCount={currentTheme.photoCount}
-            selectedThemeId={currentTheme.id}
-            themes={themes}
-            onSelectType={handleSelectTemplateType}
-            onSelectCount={handleSelectPhotoCount}
-            onSelectTheme={handleSelectTheme}
-            onProceed={() => setCurrentStep(4)}
-            onBack={() => setCurrentStep(2)}
-          />
-        )}
-
-        {/* Step 4: Pemilihan Latar Belakang Green Screen */}
-        {currentStep === 4 && (
           <StepBackgroundSelect
             backgrounds={backgrounds}
             selectedBackgroundId={selectedBackgroundId}
             onSelectBackground={setSelectedBackgroundId}
-            onProceed={() => setCurrentStep(5)}
-            onBack={() => setCurrentStep(3)}
+            onProceed={() => setCurrentStep(4)}
+            onBack={() => setCurrentStep(2)}
             onOpenAdmin={() => {
               if (isAdminLoggedIn) setIsAdminPanelOpen(true);
               else setShowAdminPinAuth(true);
@@ -302,8 +309,8 @@ export default function App() {
           />
         )}
 
-        {/* Step 5: Sesi Pemotretan Kamera Live & Countdown */}
-        {currentStep === 5 && (
+        {/* Step 4: Sesi Pemotretan Kamera Live & Countdown */}
+        {currentStep === 4 && (
           <StepCameraShoot
             photoCount={currentTheme.photoCount}
             background={currentBackground}
@@ -317,18 +324,20 @@ export default function App() {
                 (_, i) => captures[i]?.id || captures[0]?.id || null
               );
               setAssignedSlots(initSlots);
-              setCurrentStep(6);
+              setCurrentStep(5);
             }}
-            onBack={() => setCurrentStep(4)}
+            onBack={() => setCurrentStep(3)}
           />
         )}
 
-        {/* Step 6: Pemilihan Foto ke Slot Desain */}
-        {currentStep === 6 && (
+        {/* Step 5: Pemilihan Template & Masukkan Foto ke Slot Desain */}
+        {currentStep === 5 && (
           <StepPhotoSelect
             templateType={currentTheme.type}
             photoCount={currentTheme.photoCount}
             selectedTheme={currentTheme}
+            themes={themes}
+            onSelectTheme={handleSelectTheme}
             captures={capturedPhotos}
             assignedSlots={assignedSlots}
             onUpdateAssignedSlots={setAssignedSlots}
@@ -347,14 +356,14 @@ export default function App() {
                 customCaption,
               });
               setOrderHistory(getStoredOrders());
-              setCurrentStep(7);
+              setCurrentStep(6);
             }}
-            onRetake={() => setCurrentStep(5)}
+            onRetake={() => setCurrentStep(4)}
           />
         )}
 
-        {/* Step 7: Hasil Cetak Printer & QR Unduh Digital */}
-        {currentStep === 7 && (
+        {/* Step 6: Hasil Cetak Printer & QR Unduh Digital */}
+        {currentStep === 6 && (
           <StepPrintDownload
             order={{
               ...currentOrder,
@@ -390,6 +399,8 @@ export default function App() {
         currentOrder={currentOrder}
         onValidateActiveOrder={handleValidatePayment}
         orderHistory={orderHistory}
+        currentAppThemeId={appThemeId}
+        onUpdateAppThemeId={handleUpdateAppThemeId}
       />
 
       {/* AI Studio Prompt Modal (Requested by user) */}
@@ -398,16 +409,19 @@ export default function App() {
         onClose={() => setIsPromptModalOpen(false)}
       />
 
-      {/* Admin Login PIN Modal */}
+      {/* Admin Login PIN Modal dengan Fitur Ubah Tema Tampilan Kiosk */}
       {showAdminPinAuth && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/40 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="bg-white border border-stone-200/80 rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl shadow-stone-400/20">
-            <div className="flex items-center justify-between mb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/50 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white border border-stone-200/90 rounded-3xl p-6 sm:p-7 max-w-md w-full shadow-2xl shadow-stone-400/20">
+            <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2.5">
                 <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600 border border-amber-500/20">
                   <KeyRound className="w-5 h-5" />
                 </div>
-                <h3 className="text-base font-bold text-stone-900 font-heading">Login Kasir / Admin</h3>
+                <div>
+                  <h3 className="text-base font-bold text-stone-900 font-heading">Login Kasir / Admin</h3>
+                  <p className="text-[11px] text-stone-500">Akses kontrol sistem dan pengaturan tema</p>
+                </div>
               </div>
               <button
                 onClick={() => {
@@ -415,20 +429,16 @@ export default function App() {
                   setAuthPinInput('');
                   setAuthPinError('');
                 }}
-                className="text-stone-400 hover:text-stone-700 p-1 rounded-lg transition"
+                className="text-stone-400 hover:text-stone-700 p-1.5 rounded-lg hover:bg-stone-100 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <p className="text-xs text-stone-500 mb-5 leading-relaxed">
-              Masukkan PIN Admin untuk mengubah tarif, upload template, atau validasi pembayaran.
-            </p>
-
-            <form onSubmit={handleAdminAuthSubmit} className="space-y-4">
+            <form onSubmit={handleAdminAuthSubmit} className="space-y-3.5 mb-5">
               <div>
                 <label className="block text-xs font-semibold text-stone-700 mb-1.5">
-                  PIN Akses (Default: 1234)
+                  PIN Akses Kasir (Default: 1234)
                 </label>
                 <input
                   type="password"
@@ -440,29 +450,81 @@ export default function App() {
                   }}
                   placeholder="PIN..."
                   autoFocus
-                  className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-2xl text-stone-900 text-center font-mono text-xl tracking-widest focus:outline-none focus:border-amber-500 focus:bg-white shadow-inner transition"
+                  className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-2xl text-stone-900 text-center font-mono text-xl tracking-widest focus:outline-none focus:border-amber-500 focus:bg-white shadow-inner transition"
                 />
                 {authPinError && (
                   <p className="text-xs text-rose-600 mt-1.5 font-medium">{authPinError}</p>
                 )}
               </div>
 
-              <div className="flex items-center gap-2.5 pt-1">
+              <div className="flex items-center gap-2.5">
                 <button
                   type="button"
                   onClick={() => setShowAdminPinAuth(false)}
-                  className="flex-1 py-2.5 text-xs font-semibold text-stone-600 hover:text-stone-900 bg-stone-100 hover:bg-stone-200 rounded-xl transition"
+                  className="flex-1 py-2.5 text-xs font-semibold text-stone-600 hover:text-stone-900 bg-stone-100 hover:bg-stone-200 rounded-xl transition cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 text-xs font-bold text-stone-950 bg-amber-400 hover:bg-amber-300 rounded-xl shadow-md shadow-amber-400/20 transition active:scale-95"
+                  className="flex-1 py-2.5 text-xs font-bold text-stone-950 bg-amber-400 hover:bg-amber-300 rounded-xl shadow-md shadow-amber-400/20 transition active:scale-95 cursor-pointer"
                 >
                   Buka Panel Admin
                 </button>
               </div>
             </form>
+
+            {/* Fitur Ubah Tema Tampilan Kiosk pada Login Admin */}
+            <div className="pt-4 border-t border-stone-200/90">
+              <div className="flex items-center justify-between mb-2.5">
+                <span className="text-[11px] font-bold text-stone-900 flex items-center gap-1.5 uppercase tracking-wider font-heading">
+                  <Palette className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Ubah Tema Tampilan Kiosk</span>
+                </span>
+                <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300">
+                  {currentAppTheme.name}
+                </span>
+              </div>
+
+              <p className="text-[11px] text-stone-500 mb-3 leading-relaxed">
+                Pilih tema visual keseluruhan untuk aplikasi. Perubahan diterapkan secara instan ke seluruh antarmuka:
+              </p>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {APP_THEMES.map((th) => {
+                  const isCurrent = th.id === appThemeId;
+                  return (
+                    <button
+                      key={th.id}
+                      type="button"
+                      onClick={() => handleUpdateAppThemeId(th.id)}
+                      className={`p-2.5 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer ${
+                        isCurrent
+                          ? 'border-amber-500 ring-2 ring-amber-400/50 bg-amber-50/90 shadow-xs'
+                          : 'border-stone-200 bg-stone-50 hover:bg-stone-100 hover:border-stone-300'
+                      }`}
+                      title={`${th.name} • ${th.subtitle}`}
+                    >
+                      <div className="flex items-center gap-1 mb-1.5">
+                        {th.swatch.map((col, idx) => (
+                          <span
+                            key={idx}
+                            className="w-2.5 h-2.5 rounded-full border border-black/15 shrink-0"
+                            style={{ backgroundColor: col }}
+                          />
+                        ))}
+                      </div>
+                      <span className="text-[11px] font-bold text-stone-900 truncate block">
+                        {th.name.split(' ')[0]} {th.name.split(' ')[1] || ''}
+                      </span>
+                      <span className="text-[9px] text-stone-500 truncate block font-medium">
+                        {th.tag}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       )}

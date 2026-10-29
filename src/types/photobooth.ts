@@ -37,6 +37,21 @@ export interface TemplateTheme {
   overlayUrl?: string; // Optional custom transparent frame overlay uploaded by admin
   layout: 'grid' | 'vertical_strip' | 'polaroid_stack' | 'modern_split';
   badge?: string;
+  customSlots?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    label: string;
+    ratio: string;
+  }[];
+  slotPadding?: {
+    top: number;
+    bottom: number;
+    side: number;
+    gap: number;
+  };
+  cornerRadius?: number;
 }
 
 export type BackgroundRemovalMode = 'ai_virtual' | 'green_screen' | 'none';
@@ -77,4 +92,52 @@ export interface OrderSession {
 
 export interface AdminCredentials {
   pin: string;
+}
+
+export type AppThemeId =
+  | 'warm_amber'
+  | 'korean_pastel'
+  | 'cyberpunk_neon'
+  | 'minimal_noir'
+  | 'matcha_sage'
+  | 'sunset_retro';
+
+export interface AppThemeConfig {
+  id: AppThemeId;
+  name: string;
+  subtitle: string;
+  description: string;
+  tag: string;
+  isDark: boolean;
+  swatch: [string, string, string, string]; // [bg, surface, primary, accent]
+  
+  cssVars: {
+    '--app-bg': string;
+    '--app-surface': string;
+    '--app-surface-subtle': string;
+    '--app-border': string;
+    '--app-text': string;
+    '--app-text-muted': string;
+    '--app-primary': string;
+    '--app-primary-hover': string;
+    '--app-primary-light': string;
+    '--app-primary-text': string;
+    '--app-accent': string;
+    '--app-ring': string;
+  };
+
+  classes: {
+    bgApp: string;
+    bgNavbar: string;
+    bgCard: string;
+    bgCardSubtle: string;
+    borderCard: string;
+    textHeading: string;
+    textMuted: string;
+    primaryBtn: string;
+    primaryBtnText: string;
+    primaryAccentText: string;
+    primaryBadge: string;
+    activeStep: string;
+  };
 }

@@ -29,7 +29,7 @@ export const StepServiceSelect: React.FC<StepServiceSelectProps> = ({
     <div className="max-w-4xl mx-auto py-10 px-4 sm:px-6">
       <div className="text-center mb-10">
         <span className="text-xs font-bold font-mono tracking-widest uppercase text-amber-800 bg-amber-100/70 px-3.5 py-1.5 rounded-full border border-amber-300/80 shadow-2xs">
-          Langkah 1 dari 7 • Pilih Layanan
+          Langkah 1 dari 6 • Pilih Layanan
         </span>
         <h1 className="mt-4 text-3xl sm:text-4xl font-extrabold text-stone-900 font-heading tracking-tight">
           Pilih Paket Pengalaman Photobooth

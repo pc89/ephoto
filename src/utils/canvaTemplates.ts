@@ -3,7 +3,7 @@
  * for 4R (4x6 in) and Strip Photo (2x6 in) based on standard photobooth specifications.
  */
 
-import { PhotoCount, TemplateType } from '../types/photobooth';
+import { PhotoCount, TemplateTheme, TemplateType } from '../types/photobooth';
 
 export interface SlotBox {
   x: number;
@@ -363,23 +363,208 @@ export function getPresetForTemplate(type: TemplateType, count: PhotoCount): Can
   return CANVA_PRESETS.find((p) => p.type === type) || CANVA_PRESETS[0];
 }
 
+/**
+ * Get slots for a theme, prioritizing customSlots if calibrated on the theme
+ */
+export function getSlotsForTheme(
+  theme: TemplateTheme | undefined,
+  type: TemplateType,
+  count: PhotoCount
+): SlotBox[] {
+  if (theme?.customSlots && theme.customSlots.length === count) {
+    return theme.customSlots;
+  }
+  return getPresetForTemplate(type, count).slots;
+}
+
+/**
+ * Calculate precise photobooth slot boxes from customizable margins
+ */
+export function calculateSlots({
+  width,
+  height,
+  type,
+  count,
+  topMargin,
+  bottomMargin,
+  sideMargin,
+  gap,
+}: {
+  width: number;
+  height: number;
+  type: TemplateType;
+  count: PhotoCount;
+  topMargin: number;
+  bottomMargin: number;
+  sideMargin: number;
+  gap: number;
+}): SlotBox[] {
+  if (type === 'strip_photo') {
+    // Vertical strip of 'count' photos
+    const totalGaps = gap * (count - 1);
+    const availableHeight = height - topMargin - bottomMargin - totalGaps;
+    const slotHeight = Math.max(10, Math.floor(availableHeight / count));
+    const slotWidth = Math.max(10, width - sideMargin * 2);
+
+    return Array.from({ length: count }, (_, i) => ({
+      x: sideMargin,
+      y: topMargin + i * (slotHeight + gap),
+      width: slotWidth,
+      height: slotHeight,
+      label: `Slot Foto ${i + 1}`,
+      ratio: '4:3 Landscape',
+    }));
+  } else {
+    // Single Frame 4R
+    if (count === 4) {
+      // 2x2 grid
+      const availableWidth = width - sideMargin * 2 - gap;
+      const slotWidth = Math.max(10, Math.floor(availableWidth / 2));
+      const availableHeight = height - topMargin - bottomMargin - gap;
+      const slotHeight = Math.max(10, Math.floor(availableHeight / 2));
+
+      return [
+        { x: sideMargin, y: topMargin, width: slotWidth, height: slotHeight, label: 'Slot Foto 1', ratio: 'Grid' },
+        { x: sideMargin + slotWidth + gap, y: topMargin, width: slotWidth, height: slotHeight, label: 'Slot Foto 2', ratio: 'Grid' },
+        { x: sideMargin, y: topMargin + slotHeight + gap, width: slotWidth, height: slotHeight, label: 'Slot Foto 3', ratio: 'Grid' },
+        { x: sideMargin + slotWidth + gap, y: topMargin + slotHeight + gap, width: slotWidth, height: slotHeight, label: 'Slot Foto 4', ratio: 'Grid' },
+      ];
+    } else {
+      // 2 or 3 stacked landscape photos
+      const totalGaps = gap * (count - 1);
+      const availableHeight = height - topMargin - bottomMargin - totalGaps;
+      const slotHeight = Math.max(10, Math.floor(availableHeight / count));
+      const slotWidth = Math.max(10, width - sideMargin * 2);
+
+      return Array.from({ length: count }, (_, i) => ({
+        x: sideMargin,
+        y: topMargin + i * (slotHeight + gap),
+        width: slotWidth,
+        height: slotHeight,
+        label: `Slot Foto ${i + 1}`,
+        ratio: 'Landscape',
+      }));
+    }
+  }
+}
+
+/**
+ * Automatically scans an uploaded PNG image to find transparent slot cutouts (alpha < 40)
+ */
+export async function detectTransparentSlotsInImage(
+  dataUrl: string,
+  targetWidth: number,
+  targetHeight: number,
+  expectedCount: PhotoCount
+): Promise<SlotBox[] | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    if (dataUrl.startsWith('http')) img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(null);
+
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+        const imgData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+        const data = imgData.data;
+
+        // Sample scan lines vertically to locate transparent bands
+        const rowIsTransparent: boolean[] = [];
+        for (let y = 0; y < targetHeight; y += 4) {
+          let transCount = 0;
+          let samples = 0;
+          for (let x = Math.floor(targetWidth * 0.2); x < Math.floor(targetWidth * 0.8); x += 8) {
+            const idx = (y * targetWidth + x) * 4;
+            if (data[idx + 3] < 50) transCount++;
+            samples++;
+          }
+          rowIsTransparent.push(transCount / samples > 0.6);
+        }
+
+        // Group contiguous transparent bands
+        const bands: { startY: number; endY: number }[] = [];
+        let inBand = false;
+        let bandStart = 0;
+
+        for (let i = 0; i < rowIsTransparent.length; i++) {
+          const actualY = i * 4;
+          if (rowIsTransparent[i] && !inBand) {
+            inBand = true;
+            bandStart = actualY;
+          } else if (!rowIsTransparent[i] && inBand) {
+            inBand = false;
+            if (actualY - bandStart > 60) {
+              bands.push({ startY: bandStart, endY: actualY });
+            }
+          }
+        }
+        if (inBand && targetHeight - bandStart > 60) {
+          bands.push({ startY: bandStart, endY: targetHeight });
+        }
+
+        if (bands.length === expectedCount) {
+          // Found matching bands! Now find horizontal bounds for each band
+          const detectedSlots: SlotBox[] = bands.map((band, idx) => {
+            const midY = Math.floor((band.startY + band.endY) / 2);
+            let minX = targetWidth;
+            let maxX = 0;
+
+            for (let x = 0; x < targetWidth; x += 4) {
+              const idx4 = (midY * targetWidth + x) * 4;
+              if (data[idx4 + 3] < 50) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+              }
+            }
+
+            const slotX = minX < targetWidth ? minX : 40;
+            const slotW = maxX > minX ? maxX - minX : targetWidth - 80;
+            return {
+              x: slotX,
+              y: band.startY,
+              width: slotW,
+              height: band.endY - band.startY,
+              label: `Slot Foto ${idx + 1}`,
+              ratio: 'Auto Terdeteksi',
+            };
+          });
+
+          return resolve(detectedSlots);
+        }
+
+        resolve(null);
+      } catch (e) {
+        console.warn('Auto detection error:', e);
+        resolve(null);
+      }
+    };
+
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
 const overlayCache = new Map<string, string>();
 
 /**
  * Takes an uploaded Canva template image (JPG or PNG) and returns a transparent PNG
- * where the photo slots defined by the preset are guaranteed to be cut out cleanly.
- * This ensures that when this frame is placed ON TOP of photos, the photos show
- * through the slot windows, and the Canva frame artwork, borders, stickers, headers
- * and footers sit cleanly in front of the photos.
+ * where the photo slots defined by the preset or custom slots are cut out cleanly.
  */
 export async function punchHolesInCanvaOverlay(
   imageUrl: string,
   preset: CanvaTemplatePreset,
-  cornerRadius: number = 14
+  cornerRadius: number = 14,
+  customSlots?: SlotBox[]
 ): Promise<string> {
   if (!imageUrl) return '';
 
-  const cacheKey = `${imageUrl.slice(0, 80)}_${imageUrl.length}_${preset.id}_${cornerRadius}`;
+  const slotsToUse = customSlots && customSlots.length > 0 ? customSlots : preset.slots;
+  const cacheKey = `${imageUrl.slice(0, 80)}_${imageUrl.length}_${preset.id}_${cornerRadius}_${slotsToUse.length}_${slotsToUse[0]?.x}_${slotsToUse[0]?.y}`;
   if (overlayCache.has(cacheKey)) {
     return overlayCache.get(cacheKey)!;
   }
@@ -404,10 +589,34 @@ export async function punchHolesInCanvaOverlay(
         // Draw the uploaded Canva template stretched/fit to standard photobooth preset dimensions
         ctx.drawImage(img, 0, 0, preset.width, preset.height);
 
-        // Punch out the photo slots (making the slot areas 100% transparent holes)
+        // Check if image already has transparent cutouts (alpha < 220)
+        let hasTransparency = false;
+        try {
+          const sampleData = ctx.getImageData(0, 0, preset.width, preset.height).data;
+          // Sample every 32nd pixel for fast check
+          for (let i = 3; i < sampleData.length; i += 128) {
+            if (sampleData[i] < 220) {
+              hasTransparency = true;
+              break;
+            }
+          }
+        } catch {
+          hasTransparency = false;
+        }
+
+        if (hasTransparency) {
+          // Template already has transparent cutouts from Canva!
+          // Use scaled PNG with exact preset dimensions so user's transparent shapes and borders are preserved 100%
+          const transparentPng = canvas.toDataURL('image/png');
+          overlayCache.set(cacheKey, transparentPng);
+          resolve(transparentPng);
+          return;
+        }
+
+        // Only for opaque images (like JPG): punch out the photo slots so they become transparent holes
         ctx.save();
         ctx.globalCompositeOperation = 'destination-out';
-        preset.slots.forEach((slot) => {
+        slotsToUse.forEach((slot) => {
           ctx.beginPath();
           ctx.roundRect(slot.x, slot.y, slot.width, slot.height, cornerRadius);
           ctx.fill();

@@ -9,15 +9,20 @@ import {
   Type,
   Plus,
   Trash2,
+  Columns,
+  Grid,
+  Palette,
 } from 'lucide-react';
 import { PhotoCapture, PhotoCount, TemplateTheme, TemplateType } from '../types/photobooth';
 import { soundFx } from '../utils/audio';
-import { getPresetForTemplate, punchHolesInCanvaOverlay } from '../utils/canvaTemplates';
+import { getPresetForTemplate, getSlotsForTheme, punchHolesInCanvaOverlay } from '../utils/canvaTemplates';
 
 interface StepPhotoSelectProps {
   templateType: TemplateType;
   photoCount: PhotoCount;
   selectedTheme: TemplateTheme;
+  themes: TemplateTheme[];
+  onSelectTheme: (themeId: string) => void;
   captures: PhotoCapture[];
   assignedSlots: (string | null)[];
   onUpdateAssignedSlots: (slots: (string | null)[]) => void;
@@ -33,6 +38,8 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
   templateType,
   photoCount,
   selectedTheme,
+  themes,
+  onSelectTheme,
   captures,
   assignedSlots,
   onUpdateAssignedSlots,
@@ -47,12 +54,21 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
   const [lastAssignedInfo, setLastAssignedInfo] = useState<string | null>(null);
   const [punchedOverlayUrl, setPunchedOverlayUrl] = useState<string | null>(null);
 
+  // Template filter tabs for browsing designs
+  const [templateFilterType, setTemplateFilterType] = useState<'all' | 'strip_photo' | 'single_frame'>('all');
+  const [templateFilterCount, setTemplateFilterCount] = useState<'all' | 2 | 3 | 4>('all');
+
+  const slots = getSlotsForTheme(selectedTheme, templateType, photoCount);
+  const cornerR = selectedTheme.cornerRadius !== undefined ? selectedTheme.cornerRadius : 14;
+
   // Generate transparent slot cutouts for custom Canva template so photos sit behind the frame
   useEffect(() => {
     let isCancelled = false;
     if (selectedTheme.overlayUrl) {
       const preset = getPresetForTemplate(templateType, photoCount);
-      punchHolesInCanvaOverlay(selectedTheme.overlayUrl, preset, 14).then((url) => {
+      const currentSlots = getSlotsForTheme(selectedTheme, templateType, photoCount);
+      const r = selectedTheme.cornerRadius !== undefined ? selectedTheme.cornerRadius : 14;
+      punchHolesInCanvaOverlay(selectedTheme.overlayUrl, preset, r, currentSlots).then((url) => {
         if (!isCancelled) {
           setPunchedOverlayUrl(url);
         }
@@ -63,7 +79,7 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [selectedTheme.overlayUrl, templateType, photoCount]);
+  }, [selectedTheme, templateType, photoCount]);
 
   // Guarantee that assignedSlots has the exact length required
   useEffect(() => {
@@ -80,7 +96,6 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
   const handleAssignToSlot = (photoId: string, slotIdx: number) => {
     soundFx.playCountdownTick(false);
     const nextSlots = [...assignedSlots];
-    // Fill up to photoCount if array was shorter
     while (nextSlots.length < photoCount) {
       nextSlots.push(null);
     }
@@ -124,6 +139,13 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
   const isAllFilled =
     assignedSlots.length === photoCount && assignedSlots.every((s) => s !== null && s !== undefined);
 
+  // Filtered themes for carousel
+  const filteredThemes = themes.filter((t) => {
+    if (templateFilterType !== 'all' && t.type !== templateFilterType) return false;
+    if (templateFilterCount !== 'all' && t.photoCount !== templateFilterCount) return false;
+    return true;
+  });
+
   // CSS Filter string for preview
   const getFilterStyle = (): React.CSSProperties => {
     switch (filter) {
@@ -157,25 +179,152 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
         </span>
       </div>
 
-      <div className="text-center mb-8">
+      <div className="text-center mb-6">
         <span className="inline-flex items-center gap-1.5 text-xs font-bold font-mono tracking-wider uppercase text-amber-900 bg-amber-100 border border-amber-300 px-3.5 py-1 rounded-full shadow-sm">
           <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-          Langkah 6 dari 7 • Masukkan Foto ke Template
+          Langkah 5 dari 6 • Pilih Template & Pasang Foto
         </span>
-        <h1 className="mt-3 text-3xl sm:text-4xl font-extrabold text-stone-900 font-heading tracking-tight">
-          Masukkan Foto ke Desain Template
+        <h1 className="mt-2.5 text-2xl sm:text-3xl font-extrabold text-stone-900 font-heading tracking-tight">
+          Pilih Template & Masukkan Foto
         </h1>
-        <p className="mt-2 text-stone-600 text-sm max-w-xl mx-auto leading-relaxed">
-          Pilih foto terbaik Anda lalu tentukan ingin ditaruh di <strong>Slot 1, 2, 3, atau 4</strong>.
-          Foto otomatis muncul di desain template sebelah kanan.
+        <p className="mt-1.5 text-stone-600 text-xs sm:text-sm max-w-xl mx-auto leading-relaxed">
+          Pilih format bingkai atau desain Canva, lalu masukkan pose foto favorit Anda ke dalam masing-masing slot.
         </p>
 
         {lastAssignedInfo && (
-          <div className="mt-3 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold animate-in fade-in slide-in-from-top-1">
+          <div className="mt-2.5 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold animate-in fade-in slide-in-from-top-1">
             <Check className="w-4 h-4 text-emerald-600 stroke-[3]" />
             <span>{lastAssignedInfo}</span>
           </div>
         )}
+      </div>
+
+      {/* Template Chooser Bar */}
+      <div className="mb-8 p-4 rounded-3xl bg-white border border-stone-200 shadow-sm space-y-3.5">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-stone-100 pb-3">
+          <div className="flex items-center gap-2">
+            <Palette className="w-4 h-4 text-amber-600" />
+            <h3 className="text-xs font-bold text-stone-900 uppercase tracking-wider font-heading">
+              Pilih Desain Template ({filteredThemes.length} Desain Tersedia)
+            </h3>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Format Filter */}
+            <div className="flex items-center gap-1 bg-stone-100 p-1 rounded-xl text-xs font-semibold">
+              <button
+                onClick={() => setTemplateFilterType('all')}
+                className={`px-2.5 py-1 rounded-lg transition ${
+                  templateFilterType === 'all'
+                    ? 'bg-white text-stone-950 font-bold shadow-xs'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                Semua
+              </button>
+              <button
+                onClick={() => setTemplateFilterType('strip_photo')}
+                className={`px-2.5 py-1 rounded-lg transition flex items-center gap-1 ${
+                  templateFilterType === 'strip_photo'
+                    ? 'bg-white text-stone-950 font-bold shadow-xs'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                <Columns className="w-3 h-3 rotate-90" />
+                <span>Strip (2x6)</span>
+              </button>
+              <button
+                onClick={() => setTemplateFilterType('single_frame')}
+                className={`px-2.5 py-1 rounded-lg transition flex items-center gap-1 ${
+                  templateFilterType === 'single_frame'
+                    ? 'bg-white text-stone-950 font-bold shadow-xs'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                <Grid className="w-3 h-3" />
+                <span>Single 4R</span>
+              </button>
+            </div>
+
+            {/* Photo Count Filter */}
+            <div className="flex items-center gap-1 bg-stone-100 p-1 rounded-xl text-xs font-semibold">
+              {(['all', 2, 3, 4] as const).map((cnt) => (
+                <button
+                  key={cnt}
+                  onClick={() => setTemplateFilterCount(cnt)}
+                  className={`px-2.5 py-1 rounded-lg transition ${
+                    templateFilterCount === cnt
+                      ? 'bg-white text-stone-950 font-bold shadow-xs'
+                      : 'text-stone-600 hover:text-stone-900'
+                  }`}
+                >
+                  {cnt === 'all' ? 'Semua Foto' : `${cnt} Foto`}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Horizontal Theme Cards Carousel */}
+        <div className="flex items-center gap-3 overflow-x-auto pb-2 scrollbar-thin">
+          {filteredThemes.map((th) => {
+            const isSelected = th.id === selectedTheme.id;
+            return (
+              <div
+                key={th.id}
+                onClick={() => onSelectTheme(th.id)}
+                className={`flex-shrink-0 w-44 p-3 rounded-2xl border-2 cursor-pointer transition-all duration-150 flex flex-col justify-between ${
+                  isSelected
+                    ? 'bg-amber-50/70 border-amber-500 ring-2 ring-amber-400/40 shadow-md scale-[1.02]'
+                    : 'bg-stone-50 border-stone-200 hover:border-stone-300 hover:bg-white'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-md bg-stone-200 text-stone-800">
+                    {th.type === 'strip_photo' ? 'Strip 2x6' : '4R Postcard'}
+                  </span>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-900">
+                    {th.photoCount} Slot
+                  </span>
+                </div>
+
+                {/* Preview Thumbnail Box */}
+                <div
+                  className="w-full h-16 rounded-xl border border-stone-200 overflow-hidden relative flex items-center justify-center mb-2"
+                  style={{ backgroundColor: th.bgColor || '#ffffff' }}
+                >
+                  {th.overlayUrl ? (
+                    <img
+                      src={th.overlayUrl}
+                      alt={th.name}
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-[10px] font-bold text-stone-600">
+                      <span>{th.layout}</span>
+                    </div>
+                  )}
+                  {isSelected && (
+                    <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                      <Check className="w-3 h-3 stroke-[3]" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-stone-900 truncate" title={th.name}>
+                    {th.name}
+                  </span>
+                  {th.overlayUrl && (
+                    <span className="text-[9px] font-extrabold text-amber-700 bg-amber-100 px-1 rounded">
+                      Canva
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start mb-10">
@@ -353,15 +502,6 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
                   borderColor: selectedTheme.borderColor || '#e7e5e4',
                 }}
               >
-                {/* Layer 0: Custom Template Background base if present */}
-                {selectedTheme.overlayUrl && (
-                  <img
-                    src={selectedTheme.overlayUrl}
-                    alt="Template Base Artwork"
-                    className="absolute inset-0 w-full h-full object-fill pointer-events-none z-0"
-                  />
-                )}
-
                 {/* Studio Header (Rendered only for built-in themes) */}
                 {!selectedTheme.overlayUrl && (
                   <div
@@ -377,7 +517,7 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
                       className="text-xs font-black tracking-widest uppercase font-heading block leading-tight"
                       style={{ color: selectedTheme.textColor }}
                     >
-                      FOTOKIOSK PRO
+                      E PHOTO BOOTH
                     </span>
                     <span
                       className="text-[9px] tracking-widest font-mono uppercase opacity-70 block mt-0.5"
@@ -388,48 +528,60 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
                   </div>
                 )}
 
-                {/* Layer 1: Photo Slots positioned INSIDE the frame windows (z-10) */}
-                {preset.slots.map((slot, slotIdx) => {
+                {/* Layer 1: Photo Slots positioned BEHIND the frame (z-10) */}
+                {/* Posisi layer foto berada di BELAKANG template, sehingga foto muncul pada bagian jendela yang transparan */}
+                {slots.map((slot, slotIdx) => {
                   const assignedPhotoId = assignedSlots[slotIdx];
                   const photoObj = captures.find((c) => c.id === assignedPhotoId);
                   const isActive = activeSlotIndex === slotIdx;
+                  const isCanva = !!selectedTheme.overlayUrl;
+
+                  // Bleed agar foto di belakang template menutupi seluruh jendela transparan tanpa celah putih
+                  const bleedPctX = isCanva ? 1.0 : 0;
+                  const bleedPctY = isCanva ? 0.8 : 0;
+
+                  const leftPct = Math.max(0, (slot.x / preset.width) * 100 - bleedPctX);
+                  const topPct = Math.max(0, (slot.y / preset.height) * 100 - bleedPctY);
+                  const widthPct = Math.min(100 - leftPct, (slot.width / preset.width) * 100 + bleedPctX * 2);
+                  const heightPct = Math.min(100 - topPct, (slot.height / preset.height) * 100 + bleedPctY * 2);
 
                   return (
                     <div
                       key={slotIdx}
                       onClick={() => setActiveSlotIndex(slotIdx)}
-                      className={`group absolute rounded-xl overflow-hidden cursor-pointer transition-all duration-150 flex items-center justify-center z-10 ${
-                        !selectedTheme.overlayUrl
+                      className={`group absolute overflow-hidden cursor-pointer transition-all duration-150 flex items-center justify-center z-10 ${
+                        !isCanva
                           ? `border-3 ${
                               isActive
                                 ? 'ring-4 ring-amber-400 shadow-xl scale-[1.01]'
                                 : 'shadow-md hover:scale-[1.005]'
                             }`
-                          : 'shadow-inner'
+                          : ''
                       }`}
                       style={{
-                        left: `${(slot.x / preset.width) * 100}%`,
-                        top: `${(slot.y / preset.height) * 100}%`,
-                        width: `${(slot.width / preset.width) * 100}%`,
-                        height: `${(slot.height / preset.height) * 100}%`,
-                        borderColor: !selectedTheme.overlayUrl
+                        left: `${leftPct}%`,
+                        top: `${topPct}%`,
+                        width: `${widthPct}%`,
+                        height: `${heightPct}%`,
+                        borderRadius: !isCanva ? `${(cornerR / preset.width) * 100 * 2.5}px` : undefined,
+                        borderColor: !isCanva
                           ? isActive
                             ? '#f59e0b'
                             : selectedTheme.borderColor || '#ffffff'
                           : 'transparent',
-                        backgroundColor: photoObj ? 'transparent' : 'rgba(245, 245, 244, 0.9)',
+                        backgroundColor: photoObj ? 'transparent' : 'rgba(245, 245, 244, 0.95)',
                       }}
-                      title={`Klik untuk memilih Slot Bingkai ${slotIdx + 1}`}
+                      title={`Klik untuk memilih Slot Foto ${slotIdx + 1}`}
                     >
                       {photoObj ? (
                         <img
                           src={photoObj.dataUrl}
                           alt={`Slot ${slotIdx + 1}`}
                           style={getFilterStyle()}
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover select-none"
                         />
                       ) : (
-                        <div className="flex flex-col items-center justify-center p-2 text-stone-500 text-center gap-1">
+                        <div className="flex flex-col items-center justify-center p-2 text-stone-500 text-center gap-1 select-none">
                           <Plus className="w-5 h-5 text-amber-600 stroke-[2.5]" />
                           <span className="text-[11px] font-bold text-stone-800">Slot {slotIdx + 1}</span>
                           <span className="text-[9px] text-stone-500 font-medium">Klik untuk isi</span>
@@ -439,8 +591,8 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
                   );
                 })}
 
-                {/* Layer 2: Canva Frame Overlay with cut out slot windows (z-20) */}
-                {/* Sits ON TOP of the photos, so Canva borders, stickers, headers and artwork frame the photo! */}
+                {/* Layer 2: Template Bingkai Canva DI DEPAN FOTO (z-20) */}
+                {/* Diletakkan di DEPAN layer foto, sehingga foto yang ada di layer belakang muncul melalui bagian transparan */}
                 {selectedTheme.overlayUrl && (
                   <img
                     src={punchedOverlayUrl || selectedTheme.overlayUrl}
@@ -449,8 +601,8 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
                   />
                 )}
 
-                {/* Layer 3: Interactive Active Slot Target Rings & Delete Action Buttons (z-30) */}
-                {preset.slots.map((slot, slotIdx) => {
+                {/* Layer 3: Kontrol Slot Aktif & Tombol Hapus (z-30) */}
+                {slots.map((slot, slotIdx) => {
                   const assignedPhotoId = assignedSlots[slotIdx];
                   const photoObj = captures.find((c) => c.id === assignedPhotoId);
                   const isActive = activeSlotIndex === slotIdx;
@@ -459,16 +611,17 @@ export const StepPhotoSelect: React.FC<StepPhotoSelectProps> = ({
                     <div
                       key={`ctrl-${slotIdx}`}
                       onClick={() => setActiveSlotIndex(slotIdx)}
-                      className={`absolute rounded-xl pointer-events-none z-30 transition-all duration-150 ${
+                      className={`absolute pointer-events-none z-30 transition-all duration-150 rounded-xl ${
                         isActive
-                          ? 'ring-4 ring-amber-400 shadow-xl'
-                          : 'hover:ring-2 hover:ring-amber-300/60'
+                          ? 'ring-2 ring-amber-400 shadow-md ring-offset-1'
+                          : 'hover:ring-1 hover:ring-amber-300/60'
                       }`}
                       style={{
                         left: `${(slot.x / preset.width) * 100}%`,
                         top: `${(slot.y / preset.height) * 100}%`,
                         width: `${(slot.width / preset.width) * 100}%`,
                         height: `${(slot.height / preset.height) * 100}%`,
+                        borderRadius: `${(cornerR / preset.width) * 100 * 2.5}px`,
                       }}
                     >
                       {/* Active / Slot Tag Badge */}

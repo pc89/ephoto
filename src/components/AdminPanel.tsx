@@ -20,6 +20,7 @@ import {
   BookOpen,
   Link,
   Save,
+  Sparkles,
 } from 'lucide-react';
 import {
   BackgroundItem,
@@ -29,15 +30,21 @@ import {
   TemplateTheme,
   TemplateType,
   PhotoCount,
+  AppThemeId,
 } from '../types/photobooth';
 import {
   CANVA_PRESETS,
   downloadCanvaGuide,
   downloadTransparentCanvaFrame,
   CanvaTemplatePreset,
+  calculateSlots,
+  detectTransparentSlotsInImage,
+  getPresetForTemplate,
+  SlotBox,
 } from '../utils/canvaTemplates';
 import { soundFx } from '../utils/audio';
 import { optimizeImageFile } from '../utils/imageOptimizer';
+import { APP_THEMES, getAppTheme } from '../utils/appThemes';
 
 interface AdminPanelProps {
   isOpen: boolean;
@@ -55,6 +62,8 @@ interface AdminPanelProps {
   currentOrder: OrderSession | null;
   onValidateActiveOrder: () => void;
   orderHistory: OrderSession[];
+  currentAppThemeId?: AppThemeId;
+  onUpdateAppThemeId?: (themeId: AppThemeId) => void;
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -73,9 +82,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   currentOrder,
   onValidateActiveOrder,
   orderHistory,
+  currentAppThemeId,
+  onUpdateAppThemeId,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'payments' | 'pricing' | 'backgrounds' | 'templates' | 'canva' | 'chroma' | 'security'
+    'payments' | 'pricing' | 'app_theme' | 'backgrounds' | 'templates' | 'canva' | 'chroma' | 'security'
   >('payments');
 
   // Canva filter state
@@ -109,6 +120,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newThemeTextColor, setNewThemeTextColor] = useState<string>('#18181b');
   const [newThemeOverlayUrl, setNewThemeOverlayUrl] = useState<string>('');
   const [isProcessingTheme, setIsProcessingTheme] = useState<boolean>(false);
+
+  // Slot Calibration state for Canva precision
+  const [slotPadding, setSlotPadding] = useState<{ top: number; bottom: number; side: number; gap: number }>({
+    top: 120,
+    bottom: 200,
+    side: 40,
+    gap: 20,
+  });
+  const [cornerRadius, setCornerRadius] = useState<number>(14);
+  const [customSlots, setCustomSlots] = useState<SlotBox[] | null>(null);
+  const [autoDetectStatus, setAutoDetectStatus] = useState<string | null>(null);
+  const [editingThemeId, setEditingThemeId] = useState<string | null>(null);
 
   // PIN state
   const [newPin, setNewPin] = useState<string>('');
@@ -178,6 +201,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       try {
         const compressed = await optimizeImageFile(file, 1200, 1800, true);
         setNewThemeOverlayUrl(compressed);
+        setAutoDetectStatus(null);
+        setCustomSlots(null);
       } catch (err) {
         console.warn('Theme optimization fallback:', err);
         const reader = new FileReader();
@@ -189,10 +214,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const handleAutoDetectSlots = async () => {
+    if (!newThemeOverlayUrl) return;
+    setAutoDetectStatus('Sedang memindai lubang transparan Canva...');
+    const preset = getPresetForTemplate(newThemeType, newThemeCount);
+    const detected = await detectTransparentSlotsInImage(newThemeOverlayUrl, preset.width, preset.height, newThemeCount);
+    if (detected && detected.length === newThemeCount) {
+      setCustomSlots(detected);
+      setAutoDetectStatus(`✓ Berhasil mendeteksi ${detected.length} lubang slot foto otomatis!`);
+      soundFx.playPaymentVerified();
+    } else {
+      setAutoDetectStatus('Tidak menemukan lubang transparan otomatis. Silakan gunakan slider penyesuaian posisi.');
+    }
+  };
+
+  const handleResetToPresetMargins = () => {
+    if (newThemeType === 'strip_photo') {
+      setSlotPadding({ top: 120, bottom: 200, side: 40, gap: 20 });
+    } else {
+      setSlotPadding({ top: 130, bottom: 150, side: 45, gap: 25 });
+    }
+    setCustomSlots(null);
+    setAutoDetectStatus('Posisi di-reset ke standar preset.');
+  };
+
   const handleAddTheme = (e: React.FormEvent) => {
     e.preventDefault();
+    const currentPreset = getPresetForTemplate(newThemeType, newThemeCount);
+    const resolvedSlots =
+      customSlots ||
+      calculateSlots({
+        width: currentPreset.width,
+        height: currentPreset.height,
+        type: newThemeType,
+        count: newThemeCount,
+        topMargin: slotPadding.top,
+        bottomMargin: slotPadding.bottom,
+        sideMargin: slotPadding.side,
+        gap: slotPadding.gap,
+      });
+
     const newTheme: TemplateTheme = {
-      id: `theme-custom-${Date.now()}`,
+      id: editingThemeId || `theme-custom-${Date.now()}`,
       name: newThemeName.trim() || 'Custom Theme',
       type: newThemeType,
       photoCount: newThemeCount,
@@ -202,11 +265,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       borderColor: 'rgba(128,128,128,0.3)',
       overlayUrl: newThemeOverlayUrl || undefined,
       layout: newThemeType === 'strip_photo' ? 'vertical_strip' : 'grid',
+      customSlots: resolvedSlots,
+      slotPadding,
+      cornerRadius,
     };
 
-    onUpdateThemes([...themes, newTheme]);
+    if (editingThemeId) {
+      onUpdateThemes(themes.map((t) => (t.id === editingThemeId ? newTheme : t)));
+    } else {
+      onUpdateThemes([...themes, newTheme]);
+    }
+
     setNewThemeName('');
     setNewThemeOverlayUrl('');
+    setCustomSlots(null);
+    setEditingThemeId(null);
+    setAutoDetectStatus(null);
+  };
+
+  const handleEditTheme = (th: TemplateTheme) => {
+    setEditingThemeId(th.id);
+    setNewThemeName(th.name);
+    setNewThemeType(th.type);
+    setNewThemeCount(th.photoCount);
+    setNewThemeBgColor(th.bgColor || '#ffffff');
+    setNewThemeTextColor(th.textColor || '#18181b');
+    setNewThemeOverlayUrl(th.overlayUrl || '');
+    if (th.slotPadding) {
+      setSlotPadding(th.slotPadding);
+    }
+    if (th.cornerRadius !== undefined) {
+      setCornerRadius(th.cornerRadius);
+    }
+    if (th.customSlots) {
+      setCustomSlots(th.customSlots);
+    }
   };
 
   const handleDeleteTheme = (id: string) => {
@@ -254,6 +347,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           {[
             { id: 'payments', label: 'Validasi Pembayaran', icon: CheckCircle },
             { id: 'pricing', label: 'Tarif & Booth', icon: DollarSign },
+            { id: 'app_theme', label: 'Tema Tampilan Kiosk', icon: Sparkles },
             { id: 'backgrounds', label: 'Upload Background', icon: ImageIcon },
             { id: 'templates', label: 'Upload Template', icon: Layout },
             { id: 'canva', label: 'Studio Template Canva', icon: Palette },
@@ -468,7 +562,200 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </form>
           )}
 
-          {/* TAB 3: UPLOAD BACKGROUND GREEN SCREEN */}
+          {/* TAB TEMA TAMPILAN KIOSK */}
+          {activeTab === 'app_theme' && (
+            <div className="space-y-6">
+              <div className="p-5 rounded-2xl bg-white border border-stone-200 shadow-sm space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 pb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-stone-900 uppercase tracking-wider flex items-center gap-2 font-heading">
+                      <Sparkles className="w-4 h-4 text-amber-600" />
+                      <span>Ubah Tema Tampilan Kiosk (Universal UI Theme)</span>
+                    </h3>
+                    <p className="text-xs text-stone-500 mt-1 leading-relaxed">
+                      Pilih tema visual keseluruhan untuk aplikasi FotoKiosk Pro Anda. Tema ini mengatur latar belakang layar, navbar, kartu, tombol, dan warna teks di seluruh sistem kasir dan layar customer.
+                    </p>
+                  </div>
+
+                  <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 shrink-0 shadow-2xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>Tema Aktif: {getAppTheme(currentAppThemeId).name}</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Theme Cards Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {APP_THEMES.map((theme) => {
+                  const isActive = (currentAppThemeId || 'warm_amber') === theme.id;
+
+                  return (
+                    <div
+                      key={theme.id}
+                      className={`rounded-2xl border-2 transition-all duration-200 flex flex-col justify-between overflow-hidden shadow-sm hover:shadow-md ${
+                        isActive
+                          ? 'border-amber-500 ring-2 ring-amber-400/40 bg-white'
+                          : 'border-stone-200 bg-white hover:border-stone-300'
+                      }`}
+                    >
+                      {/* Live Miniature Mockup Preview */}
+                      <div
+                        className="p-3.5 border-b relative select-none"
+                        style={{
+                          backgroundColor: theme.cssVars['--app-bg'],
+                          borderColor: theme.cssVars['--app-border'],
+                        }}
+                      >
+                        {/* Mock Navbar */}
+                        <div
+                          className="rounded-xl p-2 mb-2 flex items-center justify-between shadow-2xs border"
+                          style={{
+                            backgroundColor: theme.cssVars['--app-surface'],
+                            borderColor: theme.cssVars['--app-border'],
+                          }}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <div
+                              className="w-4 h-4 rounded-md flex items-center justify-center text-[8px] font-black"
+                              style={{
+                                backgroundColor: theme.cssVars['--app-primary'],
+                                color: theme.cssVars['--app-primary-text'],
+                              }}
+                            >
+                              ★
+                            </div>
+                            <span
+                              className="text-[10px] font-extrabold tracking-tight font-heading truncate max-w-[85px]"
+                              style={{ color: theme.cssVars['--app-text'] }}
+                            >
+                              FOTOKIOSK
+                            </span>
+                          </div>
+                          <div
+                            className="text-[8px] font-bold px-1.5 py-0.5 rounded-md"
+                            style={{
+                              backgroundColor: theme.cssVars['--app-primary'],
+                              color: theme.cssVars['--app-primary-text'],
+                            }}
+                          >
+                            Step 1/6
+                          </div>
+                        </div>
+
+                        {/* Mock Card Content */}
+                        <div
+                          className="rounded-xl p-2.5 border shadow-xs space-y-1.5"
+                          style={{
+                            backgroundColor: theme.cssVars['--app-surface'],
+                            borderColor: theme.cssVars['--app-border'],
+                          }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span
+                              className="text-[10px] font-bold truncate max-w-[140px]"
+                              style={{ color: theme.cssVars['--app-text'] }}
+                            >
+                              {theme.name}
+                            </span>
+                            <span
+                              className="text-[8px] font-bold px-1.5 py-0.5 rounded"
+                              style={{
+                                backgroundColor: theme.cssVars['--app-primary-light'],
+                                color: theme.cssVars['--app-primary-text'],
+                              }}
+                            >
+                              {theme.isDark ? 'Dark Mode' : 'Light'}
+                            </span>
+                          </div>
+                          <div
+                            className="text-[9px] line-clamp-1"
+                            style={{ color: theme.cssVars['--app-text-muted'] }}
+                          >
+                            {theme.subtitle}
+                          </div>
+
+                          {/* Mock CTA Button */}
+                          <div
+                            className="w-full py-1 rounded-lg text-center text-[9px] font-extrabold shadow-2xs mt-1"
+                            style={{
+                              backgroundColor: theme.cssVars['--app-primary'],
+                              color: theme.cssVars['--app-primary-text'],
+                            }}
+                          >
+                            Mulai Sesi Foto
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Theme Details & Swatch */}
+                      <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                        <div>
+                          <div className="flex items-center justify-between gap-1.5 mb-1">
+                            <h4 className="text-xs font-bold text-stone-900 font-heading">
+                              {theme.name}
+                            </h4>
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-stone-100 text-stone-700 border border-stone-200">
+                              {theme.tag}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-stone-500 leading-relaxed mb-2.5">
+                            {theme.description}
+                          </p>
+
+                          {/* Swatch dots */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">
+                              Palet:
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {theme.swatch.map((color, idx) => (
+                                <span
+                                  key={idx}
+                                  className="w-4 h-4 rounded-full border border-stone-300 shadow-2xs"
+                                  style={{ backgroundColor: color }}
+                                  title={color}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onUpdateAppThemeId) {
+                              onUpdateAppThemeId(theme.id);
+                              soundFx.playPaymentVerified();
+                            }
+                          }}
+                          className={`w-full py-2.5 px-4 rounded-xl text-xs font-extrabold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                            isActive
+                              ? 'bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-600'
+                              : 'bg-stone-100 hover:bg-stone-200 text-stone-800'
+                          }`}
+                        >
+                          {isActive ? (
+                            <>
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              <span>✓ Tema Sedang Digunakan</span>
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Terapkan Tema Ini</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: UPLOAD BACKGROUND GREEN SCREEN */}
           {activeTab === 'backgrounds' && (
             <div className="space-y-6">
               {/* Form Upload */}
@@ -693,30 +980,248 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
                 )}
 
+                {/* Interactive Slot Calibration Panel when Canva overlay is uploaded or being edited */}
                 {newThemeOverlayUrl && !isProcessingTheme && (
-                  <div className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl border border-stone-200">
-                    <img
-                      src={newThemeOverlayUrl}
-                      alt="Overlay Preview"
-                      className="w-16 h-20 object-contain rounded-lg border border-stone-300 bg-white p-1 shadow-sm"
-                    />
-                    <div>
-                      <span className="text-xs text-emerald-700 font-bold block">
-                        ✓ Desain Template Canva Siap Dipakai!
-                      </span>
-                      <span className="text-[11px] text-stone-500">
-                        Foto customer akan otomatis masuk ke dalam slot bingkai template ini.
-                      </span>
+                  <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-4 animate-in fade-in">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-amber-200/60 pb-3">
+                      <div>
+                        <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5 font-heading">
+                          <Sliders className="w-4 h-4 text-amber-700" />
+                          <span>Kalibrasi & Presisi Posisi Slot Foto Canva</span>
+                        </h4>
+                        <p className="text-[11px] text-amber-800 mt-0.5">
+                          Sesuaikan posisi slot agar pas dengan lubang foto / image placeholder pada desain Canva Anda.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleAutoDetectSlots}
+                          className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-stone-950 text-xs font-extrabold shadow-xs transition cursor-pointer"
+                        >
+                          ✨ Deteksi Otomatis Lubang
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleResetToPresetMargins}
+                          className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-stone-100 text-stone-700 border border-stone-200 text-xs font-semibold shadow-2xs transition cursor-pointer"
+                        >
+                          Reset Standar
+                        </button>
+                      </div>
+                    </div>
+
+                    {autoDetectStatus && (
+                      <div className="p-2.5 rounded-xl bg-white border border-amber-200 text-xs font-bold text-amber-900 flex items-center gap-2">
+                        <span>{autoDetectStatus}</span>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-start">
+                      {/* Sliders Controls (7 cols) */}
+                      <div className="md:col-span-7 space-y-3 text-xs">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <div className="flex justify-between font-semibold text-stone-700 mb-1">
+                              <span>Margin Atas (Header):</span>
+                              <span className="font-mono text-stone-950 font-bold">{slotPadding.top} px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="10"
+                              max="400"
+                              step="5"
+                              value={slotPadding.top}
+                              onChange={(e) => {
+                                setSlotPadding((p) => ({ ...p, top: Number(e.target.value) }));
+                                setCustomSlots(null);
+                              }}
+                              className="w-full accent-amber-500 cursor-pointer"
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex justify-between font-semibold text-stone-700 mb-1">
+                              <span>Margin Bawah (Footer):</span>
+                              <span className="font-mono text-stone-950 font-bold">{slotPadding.bottom} px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="10"
+                              max="450"
+                              step="5"
+                              value={slotPadding.bottom}
+                              onChange={(e) => {
+                                setSlotPadding((p) => ({ ...p, bottom: Number(e.target.value) }));
+                                setCustomSlots(null);
+                              }}
+                              className="w-full accent-amber-500 cursor-pointer"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <div className="flex justify-between font-semibold text-stone-700 mb-1">
+                              <span>Margin Samping:</span>
+                              <span className="font-mono text-stone-950 font-bold">{slotPadding.side} px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="5"
+                              max="150"
+                              step="5"
+                              value={slotPadding.side}
+                              onChange={(e) => {
+                                setSlotPadding((p) => ({ ...p, side: Number(e.target.value) }));
+                                setCustomSlots(null);
+                              }}
+                              className="w-full accent-amber-500 cursor-pointer"
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex justify-between font-semibold text-stone-700 mb-1">
+                              <span>Jarak Antar Slot (Gap):</span>
+                              <span className="font-mono text-stone-950 font-bold">{slotPadding.gap} px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="80"
+                              step="2"
+                              value={slotPadding.gap}
+                              onChange={(e) => {
+                                setSlotPadding((p) => ({ ...p, gap: Number(e.target.value) }));
+                                setCustomSlots(null);
+                              }}
+                              className="w-full accent-amber-500 cursor-pointer"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between font-semibold text-stone-700 mb-1">
+                            <span>Kelengkungan Sudut Foto:</span>
+                            <span className="font-mono text-stone-950 font-bold">{cornerRadius} px</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="36"
+                            step="2"
+                            value={cornerRadius}
+                            onChange={(e) => setCornerRadius(Number(e.target.value))}
+                            className="w-full accent-amber-500 cursor-pointer"
+                          />
+                          <span className="text-[10px] text-stone-500">
+                            0 px = Sudut kotak tajam • 14-24 px = Sudut melengkung halus
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Live Visual Alignment Preview (5 cols) */}
+                      <div className="md:col-span-5 flex flex-col items-center">
+                        <span className="text-[11px] font-bold text-stone-600 mb-2">
+                          Pratinjau Presisi Slot Foto:
+                        </span>
+                        {(() => {
+                          const currentPreset = getPresetForTemplate(newThemeType, newThemeCount);
+                          const previewSlots =
+                            customSlots ||
+                            calculateSlots({
+                              width: currentPreset.width,
+                              height: currentPreset.height,
+                              type: newThemeType,
+                              count: newThemeCount,
+                              topMargin: slotPadding.top,
+                              bottomMargin: slotPadding.bottom,
+                              sideMargin: slotPadding.side,
+                              gap: slotPadding.gap,
+                            });
+
+                          return (
+                            <div
+                              className="relative w-full max-w-[200px] border-2 border-amber-400 rounded-2xl overflow-hidden shadow-lg bg-stone-900"
+                              style={{
+                                aspectRatio: `${currentPreset.width} / ${currentPreset.height}`,
+                              }}
+                            >
+                              {/* Layer 1: Slot foto yang berada di BELAKANG template (z-10) */}
+                              {previewSlots.map((s, idx) => (
+                                <div
+                                  key={`slot-bg-${idx}`}
+                                  className="absolute bg-emerald-600/70 flex items-center justify-center text-white font-extrabold text-[10px] shadow-sm z-10"
+                                  style={{
+                                    left: `${(s.x / currentPreset.width) * 100}%`,
+                                    top: `${(s.y / currentPreset.height) * 100}%`,
+                                    width: `${(s.width / currentPreset.width) * 100}%`,
+                                    height: `${(s.height / currentPreset.height) * 100}%`,
+                                    borderRadius: `${(cornerRadius / currentPreset.width) * 100 * 2}px`,
+                                  }}
+                                >
+                                  Foto {idx + 1}
+                                </div>
+                              ))}
+
+                              {/* Layer 2: Template Canva diletakkan DI DEPAN foto (z-20) */}
+                              {/* Bagian transparan pada desain Canva akan menampilkan foto yang berada di belakangnya */}
+                              <img
+                                src={newThemeOverlayUrl}
+                                alt="Template Frame Canva"
+                                className="absolute inset-0 w-full h-full object-fill pointer-events-none z-20"
+                              />
+
+                              {/* Layer 3: Garis pemandu kalibrasi (z-30) */}
+                              {previewSlots.map((s, idx) => (
+                                <div
+                                  key={`guide-${idx}`}
+                                  className="absolute border border-dashed border-emerald-400 pointer-events-none z-30"
+                                  style={{
+                                    left: `${(s.x / currentPreset.width) * 100}%`,
+                                    top: `${(s.y / currentPreset.height) * 100}%`,
+                                    width: `${(s.width / currentPreset.width) * 100}%`,
+                                    height: `${(s.height / currentPreset.height) * 100}%`,
+                                    borderRadius: `${(cornerRadius / currentPreset.width) * 100 * 2}px`,
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          );
+                        })()}
+                        <span className="text-[10px] text-emerald-800 font-bold mt-1 text-center">
+                          Layer foto di belakang template • Muncul melalui jendela transparan
+                        </span>
+                      </div>
                     </div>
                   </div>
                 )}
 
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-stone-950 font-extrabold text-xs rounded-xl shadow-md transition cursor-pointer"
-                >
-                  Simpan Template Baru
-                </button>
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    type="submit"
+                    className="px-6 py-3 bg-amber-400 hover:bg-amber-300 text-stone-950 font-extrabold text-xs rounded-xl shadow-md transition cursor-pointer"
+                  >
+                    {editingThemeId ? 'Perbarui Template' : 'Simpan Template Baru'}
+                  </button>
+
+                  {editingThemeId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingThemeId(null);
+                        setNewThemeName('');
+                        setNewThemeOverlayUrl('');
+                        setCustomSlots(null);
+                        setAutoDetectStatus(null);
+                      }}
+                      className="px-4 py-3 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold text-xs rounded-xl transition cursor-pointer"
+                    >
+                      Batal Edit
+                    </button>
+                  )}
+                </div>
               </form>
 
               {/* Existing Themes */}
@@ -724,28 +1229,47 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <h4 className="text-xs font-bold text-stone-900 uppercase tracking-wider mb-3 font-heading">
                   Daftar Template Aktif ({themes.length})
                 </h4>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {themes.map((theme) => (
                     <div
                       key={theme.id}
-                      className="p-3.5 rounded-xl border border-stone-200 bg-stone-50 flex flex-col justify-between shadow-sm"
+                      className={`p-3.5 rounded-xl border flex flex-col justify-between shadow-sm transition ${
+                        editingThemeId === theme.id
+                          ? 'border-amber-400 bg-amber-50/50 ring-2 ring-amber-400/30'
+                          : 'border-stone-200 bg-stone-50'
+                      }`}
                     >
-                      <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-bold text-stone-900 truncate">
                           {theme.name}
                         </span>
-                        {theme.id.startsWith('theme-custom') && (
-                          <button
-                            onClick={() => handleDeleteTheme(theme.id)}
-                            className="text-rose-600 hover:text-rose-500 p-0.5 cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {theme.overlayUrl && (
+                            <button
+                              type="button"
+                              onClick={() => handleEditTheme(theme)}
+                              className="text-[10px] font-bold text-amber-800 bg-amber-100 hover:bg-amber-200 px-2 py-0.5 rounded cursor-pointer"
+                              title="Edit dan kalibrasi posisi slot foto"
+                            >
+                              Kalibrasi
+                            </button>
+                          )}
+                          {theme.id.startsWith('theme-custom') && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteTheme(theme.id)}
+                              className="text-rose-600 hover:text-rose-500 p-0.5 cursor-pointer"
+                              title="Hapus template"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <span className="text-[10px] text-stone-500 font-medium">
-                        {theme.type === 'strip_photo' ? 'Strip Photo' : 'Single Frame'} • {theme.photoCount} Foto
-                      </span>
+                      <div className="flex items-center justify-between text-[10px] text-stone-500 font-medium">
+                        <span>{theme.type === 'strip_photo' ? 'Strip Photo (2x6)' : 'Single Frame (4R)'} • {theme.photoCount} Foto</span>
+                        {theme.overlayUrl && <span className="font-bold text-amber-700">Canva</span>}
+                      </div>
                     </div>
                   ))}
                 </div>

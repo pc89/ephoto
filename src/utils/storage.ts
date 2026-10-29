@@ -97,8 +97,16 @@ export function getStoredThemes(): TemplateTheme[] {
     if (val) {
       const parsed = JSON.parse(val);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        memoryThemes = parsed;
-        return parsed;
+        // Ensure default Canva transparent templates are available
+        const existingIds = new Set(parsed.map((t: TemplateTheme) => t.id));
+        const merged = [...parsed];
+        DEFAULT_TEMPLATE_THEMES.forEach((def) => {
+          if (!existingIds.has(def.id)) {
+            merged.unshift(def);
+          }
+        });
+        memoryThemes = merged;
+        return merged;
       }
     }
   } catch {
